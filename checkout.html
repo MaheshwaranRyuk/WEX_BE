@@ -1,0 +1,19 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Tier selector</title>
+</head>
+<body>
+    <h1>Select a Tier:</h1>
+    <form action="http://localhost:3000/stripe/create-checkout-session" method="POST">
+        <label for="tier">Choose a Tier:</label>
+        <select name="selectedTier" id="tier">
+            <option value="basic">Basic</option>
+            <option value="pro">Pro</option>
+            <option value="premium">Premium</option>
+        </select>
+        <br>
+        <button type="submit">Checkout</button>
+    </form>
+</body>
+</html>
