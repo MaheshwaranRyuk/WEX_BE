@@ -4,33 +4,94 @@ const TableExchange = require("../Collections/ExchangeCollection");
 let resultSet;
 const crypto = require("crypto");
 const mongoose = require("mongoose");
-const moment = require('moment');
-const OTPAuth = require('otpauth');
+const moment = require("moment");
+const OTPAuth = require("otpauth");
 const { hashText, verifyText } = require("../Helpers/Bcrypt");
 const { transporter } = require("../Helpers/Mailer");
 const FileHandler = require("../Helpers/FileHandler");
 const speakeasy = require("speakeasy");
 const qrcode = require("qrcode");
 const otpGenerator = require("otp-generator");
-var shortid = require('shortid');
-
+var shortid = require("shortid");
+const MAX_LOGIN_ATTEMPTS = 3;
+const BLOCK_DURATION = 2 * 60 * 60 * 1000;
+const AesEncryption = require("aes-encryption");
+const jwt = require("jsonwebtoken");
+const { error } = require("console");
+const EmailTemplates = require("../Collections/EmailTemplates");
+const ExchangeKeyCollection = require("../Collections/ExchangeKeyCollection");
+const {
+  getKucoinClient,
+  getKucoinTradingHistory,
+} = require("../../utils/kucoin_utils");
+const { MasterTrader } = require("../Controller/UserController");
+const MasterTraderCollection = require("../Collections/MasterTraderCollection");
+const MasterTraderHistoryCollection = require("../Collections/MasterTraderHistoryCollection");
+// const aesEncryption = require("aes-encryption");
+// const aes = new AesEncryption()
+// aes.setSecretKey('11122233344455566677788822244455555555555555555231231321313aaaff')
 const generateRandomBase32 = async () => {
-  const base32Characters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
-  let base32 = '';
+  const base32Characters = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
+  let base32 = "";
   while (base32.length < 24) {
     const randomBytes = await crypto.randomBytes(1);
     const randomValue = randomBytes[0] % base32Characters.length;
     base32 += base32Characters.charAt(randomValue);
   }
-
   return base32;
 };
+async function generateReferralLink(referralCode) {
+  const baseUrl = `https://wexTrade.com/register/?refralcode=${referralCode}`;
+  return baseUrl;
+}
+// async function addExchange(req, res) {
+//   try {
+//     const { user_id,exchange,exchange_type, api_Key , Seceret_Key} = req.body;
+//     const user = await TableUser.findOne({ _id: user_id });
+//     if (!user) {
+//       return res.status(401).json({
+//         status: "fail",
+//         message: "User doesn't exist",
+//       });
+//     }
+//     const encrpytAPI = await aes.encrypt(api_Key)
+//     const encryptSecret = await aes.encrypt(Seceret_Key)
 
+//     const ins = {
+//       user_id,
+//       exchange,
+//       exchange_type,
+//       api_Key : encrpytAPI,
+//       Seceret_Key :encryptSecret
+//     }
+//     const insert = new TableExchange(ins);
+//     console.log(ins);
+//     await insert.save().then((result) => {
+//         console.log(result);
+//         resultSet = {
+//           msg: "Success: Your exchanges have been updated",
+//           statusCode: 200,
+//         };
+//       })
+//       .catch((err) => {
+//         console.log(err);
+//       });
+//     return resultSet;
+//   } catch (error) {
+//     console.log(error);
+//     resultSet = {
+//       msg: error.message,
+//       statusCode: 500,
+//     };
 
-//TODO: TAKE USER NAME FROM TOKEN
+//     return resultSet;
+//   }
+// }
 async function addExchange(req, res) {
+  let resultSet; // Declare the resultSet variable
   try {
-    const { user_id,exchange,exchange_type, api_Key , Seceret_Key} = req.body;
+    const { user_id, name, exchange, exchange_type, api_key, secret_key } =
+      req.body;
     const user = await TableUser.findOne({ _id: user_id });
     if (!user) {
       return res.status(401).json({
@@ -38,36 +99,161 @@ async function addExchange(req, res) {
         message: "User doesn't exist",
       });
     }
-    const haskApikey = await hashText(api_Key)
-    const haskApisecret = await hashText(Seceret_Key)
+    let maxApiKeysAllowed;
+    switch (user.tier) {
+      case "basic":
+        maxApiKeysAllowed = 3;
+        break;
+      case "pro":
+        maxApiKeysAllowed = 5;
+        break;
+      case "premium":
+        maxApiKeysAllowed = 10;
+        break;
+      default:
+        maxApiKeysAllowed = 1;
+        break;
+    }
+    const userApiKeysCount = await TableExchange.countDocuments({ user_id });
+    if (userApiKeysCount >= maxApiKeysAllowed) {
+      return res.status(400).json({
+        status: "fail",
+        message:
+          "You have exceeded the maximum number of API keys allowed for your subscription tier.",
+      });
+    }
+    const encrpytAPI = await aes.encrypt(api_key);
+    const encryptSecret = await aes.encrypt(secret_key);
     const ins = {
       user_id,
+      name,
       exchange,
       exchange_type,
-      api_Key : haskApikey,
-      Seceret_Key :haskApisecret
-    }
-    const insert = new TableExchange(ins);
-    console.log(ins);
-    await insert.save().then((result) => {
-        console.log(result);
+      api_key: encrpytAPI,
+      secret_key: encryptSecret,
+    };
+    const insert = new ExchangeKeyCollection(ins);
+    await insert
+      .save()
+      .then((result) => {
+        // console.log(`res`, result);
+        // console.log(result);
         resultSet = {
           msg: "Success: Your exchanges have been updated",
           statusCode: 200,
         };
       })
       .catch((err) => {
-        console.log(err);
+        // console.log(err);
       });
     return resultSet;
   } catch (error) {
-    console.log(error);
+    // console.log(error);
     resultSet = {
       msg: error.message,
       statusCode: 500,
     };
-
     return resultSet;
+  }
+}
+async function updateExchange(req, res) {
+  try {
+    const { user_id, password_confirmation, updateFields } = req.body;
+    const user = await TableUser.findOne({ _id: user_id });
+
+    if (!user) {
+      return res.status(401).json({
+        status: "fail",
+        message: "User doesn't exist",
+      });
+    }
+    const isPasswordValid = await verifyText(
+      password_confirmation,
+      user.password
+    );
+    if (!isPasswordValid) {
+      return res.status(401).json({
+        status: "fail",
+        message: "Invalid password confirmation",
+      });
+    }
+    const updateObject = {};
+    if (updateFields.name) {
+      updateObject.name = updateFields.name;
+    }
+    if (updateFields.exchange) {
+      updateObject.exchange = updateFields.exchange;
+    }
+    if (updateFields.exchange_type) {
+      updateObject.exchange_type = updateFields.exchange_type;
+    }
+    if (updateFields.api_Key) {
+      const encrpytAPI = await aes.encrypt(updateFields.api_Key);
+      updateObject.api_Key = encrpytAPI;
+    }
+    if (updateFields.Seceret_Key) {
+      const encryptSecret = await aes.encrypt(updateFields.Seceret_Key);
+      updateObject.secret_key = encryptSecret;
+    }
+    await TableExchange.updateOne({ user_id }, { $set: updateObject });
+    return res.status(200).json({
+      status: "success",
+      message: "Exchange updated successfully",
+    });
+  } catch (error) {
+    // console.log(error);
+    return res.status(500).json({
+      status: "error",
+      message: error.message,
+    });
+  }
+}
+
+async function deleteExchange(req, res) {
+  try {
+    const { user_id, password_confirmation, name } = req.body;
+    const user = await TableUser.findOne({ _id: user_id });
+
+    if (!user) {
+      return res.status(401).json({
+        status: "fail",
+        message: "User doesn't exist",
+      });
+    }
+
+    const isPasswordValid = await verifyText(
+      password_confirmation,
+      user.password
+    );
+
+    if (!isPasswordValid) {
+      return res.status(401).json({
+        status: "fail",
+        message: "Invalid password confirmation",
+      });
+    }
+
+    const exchange = await TableExchange.findOne({ _id: exchangeId, user_id });
+
+    if (!exchange) {
+      return res.status(404).json({
+        status: "fail",
+        message: "Exchange not found or doesn't belong to the user",
+      });
+    }
+
+    await TableExchange.deleteOne({ _id: name });
+
+    return res.status(200).json({
+      status: "success",
+      message: "Exchange deleted successfully",
+    });
+  } catch (error) {
+    // console.error(error);
+    return res.status(500).json({
+      status: "error",
+      message: "Internal server error",
+    });
   }
 }
 
@@ -76,7 +262,7 @@ async function getTierAndRole(req, res) {
     const { user_id } = req.params;
 
     const user = await TableUser.findOne({ _id: user_id });
-    console.log(`asddf`,user);
+    // console.log(`asddf`, user);
 
     if (!user) {
       return res.status(404).json({
@@ -90,7 +276,7 @@ async function getTierAndRole(req, res) {
     resultSet = {
       msg: "success",
       statusCode: 200,
-      tier
+      tier,
     };
     return resultSet;
   } catch (err) {
@@ -102,13 +288,13 @@ async function getTierAndRole(req, res) {
   }
 }
 
-async function tierUpgrade (req , res) {
+async function tierUpgrade(req, res) {
   try {
-    const { user_id,tier } = req.body;
-    console.log( req.body);
+    const { user_id, tier } = req.body;
+    // console.log(req.body);
 
     const user = await TableUser.findOne({ _id: user_id });
-    console.log(user);
+    // console.log(user);
     let newTier;
 
     switch (tier) {
@@ -124,11 +310,11 @@ async function tierUpgrade (req , res) {
       default:
         return {
           msg: "Invalid tier request",
-          statusCode: 400
+          statusCode: 400,
         };
     }
 
-    console.log(`newTier`,newTier);
+    // console.log(`newTier`, newTier);
     if (!user) {
       return res.status(401).json({
         status: "fail",
@@ -137,72 +323,31 @@ async function tierUpgrade (req , res) {
     }
 
     const updatedUser = await TableUser.updateOne(
-         { _id: user_id },
-         {
-          $set : {
-            tier: newTier,
-          },
-        }).then((result) => {
-          resultSet = {
-                msg:  "Success: Your tier has been upgraded to " + newTier,
-                statusCode: 200
-          }
-        }).catch((err) => {
-          console.log(err);
-        });
-        return resultSet;
+      { _id: user_id },
+      {
+        $set: {
+          tier: newTier,
+        },
+      }
+    )
+      .then((result) => {
+        resultSet = {
+          msg: "Success: Your tier has been upgraded to " + newTier,
+          statusCode: 200,
+        };
+      })
+      .catch((err) => {
+        // console.log(err);
+      });
+    return resultSet;
   } catch (error) {
     resultSet = {
-      msg:  error.message,
-      statusCode: 500
-    }
+      msg: error.message,
+      statusCode: 500,
+    };
     return resultSet;
   }
 }
-
-async function adminregister (request) {
-  try {
-    if (!request || typeof request !== "object") {
-      throw new Error("Invalid request object");
-    }
-
-    const { password, confirm_password, username, email } = request.body;
-
-    if (!password || !confirm_password || !username || !email) {
-      throw new Error("Required fields are missing");
-    }
-
-    const hashedPassword = await hashText(password);
-    const hashedConfirmPassword = await hashText(confirm_password);
-
-    const ins = {
-      username,
-      email,
-      password: hashedPassword,
-      confirm_password: hashedConfirmPassword,
-    };
-
-    const insert = new TableUser(ins);
-    const user = await insert.save().then(async (result) => {
-        await generateOTP(result._id)
-        return result._id;
-    }).catch((err) => {
-      console.log(err);
-    });
-    
-    return {
-      msg: "User created successfully",
-      statusCode: 200,
-      user: user.toString()
-    };
-  } catch (error) {
-    return {
-      msg: error.message || "An error occurred",
-      statusCode: 400,
-    };
-  }
-}
-
 async function adminLogin(request) {
   if (request != "" && typeof request !== "undefined") {
     try {
@@ -215,7 +360,6 @@ async function adminLogin(request) {
         };
         return resultSet;
       }
-
       const user = await TableUser.findOne({
         is_active: true,
         $or: [{ username: usernameOrEmail }, { email: usernameOrEmail }],
@@ -259,13 +403,289 @@ async function adminLogin(request) {
     return resultSet;
   }
 }
-
-async function approveMaster(req , res) {
+async function approveMaster(req, res) {
   try {
-    const { user_id,role } = req.body;
-    console.log( req.body);
+    const { master_id } = req.body;
+    //console.log(req.body);
+    const master = await MasterTraderCollection.findOne({ _id: master_id });
+    if (!master) {
+      return (resultSet = {
+        msg: "master trader doesn't exist",
+        statusCode: 200,
+      });
+    }
+    const user = await TableUser.findOne({ _id: master.user_id });
+    //console.log(user);
+    if (!user) {
+      return (resultSet = {
+        msg: "User doesn't exist",
+        statusCode: 200,
+      });
+    }
+    await TableUser.updateOne(
+      { _id: master.user_id },
+      {
+        $set: {
+          role: "Master_Trader",
+          tier: "free",
+        },
+      }
+    )
+      .then((result) => {
+        resultSet = {
+          msg: "Success : You are a Mastertrader",
+          statusCode: 200,
+        };
+      })
+      .catch((err) => {
+        // console.log(err);
+      });
+    const aes = new AesEncryption();
+    // console.log(req.params);
+    aes.setSecretKey(process.env.AES_SECRET);
+    const exchanges = await ExchangeKeyCollection.findOne({
+      _id: master.api_key,
+    });
+    let { exchange, passphrase, api_key, api_secret, trade_type } = exchanges;
+
+    if (exchange == "KUCOIN" && trade_type == "spot") {
+      passphrase = await aes.decrypt(passphrase);
+      api_key = await aes.decrypt(api_key);
+      api_secret = await aes.decrypt(api_secret);
+      createKucoinSocket(api_key, api_secret, passphrase);
+      const kucoin = getKucoinClient(api_key, api_secret, passphrase);
+      const history = await getKucoinTradingHistory(kucoin);
+      if (history.code === "200000") {
+        const data = history.data.items;
+        const h_data = [];
+        data.forEach((d) => {
+          const trade_id = d.id;
+          const symbol = d.symbol;
+          const exchange_type = "KUCOIN";
+          const side = d.side;
+          const date_trade = d.createdAt;
+          const amount = d.funds;
+          h_data.push({
+            trade_id,
+            symbol,
+            exchange_type,
+            side,
+            date_trade,
+            amount,
+            master_id,
+          });
+        });
+        MasterTraderHistoryCollection.insertMany(h_data);
+      }
+    } else if (exchange == "OKX" && trade_type == "spot") {
+      passphrase = await aes.decrypt(passphrase);
+      api_key = await aes.decrypt(api_key);
+      api_secret = await aes.decrypt(api_secret);
+    console.log(exchange, passphrase, api_key, api_secret, trade_type,"pppppppppppppppp");
+
+      // createKucoinSocket(api_key, api_secret, passphrase);
+      const symbol = "BTC-USDT";
+
+      const user = getOKXClient(api_key, api_secret, passphrase);
+      const history = await user
+        .getOrderHistory({ instId: symbol, instType: "SPOT" });
+        // .then((orderHistory) => {
+        //   // calculateTradeStatistics(orderHistory);
+        // })
+        // .catch((error) => {
+        // });
+        // console.log(history,"mmmmmmmmm");
+      if (history.length > 0) {
+        const data = history;
+        const h_data = [];
+        data.forEach((d) => {
+          const trade_id = d.tradeId;
+          const symbol = d.instId;
+          const exchange_type = "OKX";
+          const side = d.side;
+          const date_trade = d.createdAt;
+          const amount = Number(d.fillSz) * Number(d.fillPx);
+          h_data.push({
+            trade_id,
+            symbol,
+            exchange_type,
+            side,
+            date_trade,
+            amount,
+            master_id,
+          });
+        });
+        MasterTraderHistoryCollection.insertMany(h_data);
+      }
+    }
+
+    return resultSet;
+  } catch (error) {
+    console.log(error);
+    resultSet = {
+      msg: error.message,
+      statusCode: 500,
+    };
+    return resultSet;
+  }
+}
+const getOKXClient = (key, secret, passphrase) => {
+  const { RestClient } = require("okx-api");
+  const client = new RestClient({
+    apiKey: key,
+    apiSecret: secret,
+    apiPass: passphrase,
+  });
+
+  return client;
+};
+const calculateTradeStatistics = (trades) => {
+  const tradeStats = {};
+  trades.forEach((trade) => {
+    const symbol = trade.instId;
+    const side = trade.side;
+    const dealFunds = Number(trade.fillSz) * Number(trade.fillPx);
+    const fee = Math.abs(Number(trade.fee));
+
+    if (!tradeStats[symbol]) {
+      tradeStats[symbol] = {
+        buyTotal: 0,
+        sellTotal: 0,
+        feeTotal: 0,
+        pnl: 0,
+        roi: 0,
+        verdict: "",
+      };
+    }
+
+    if (side === "buy") {
+      tradeStats[symbol].buyTotal += dealFunds;
+    } else if (side === "sell") {
+      tradeStats[symbol].sellTotal += dealFunds;
+    }
+
+    tradeStats[symbol].feeTotal += fee;
+
+    const totalBuy = tradeStats[symbol].buyTotal;
+    const totalSell = tradeStats[symbol].sellTotal;
+    const totalFee = tradeStats[symbol].feeTotal;
+
+    const pnl = totalSell - totalBuy - totalFee;
+    const roi = (totalSell / totalBuy - 1) * 100;
+
+    tradeStats[symbol].pnl = pnl.toFixed(8);
+    tradeStats[symbol].roi = roi.toFixed(2) + "%";
+    tradeStats[symbol].verdict = pnl <= 0 ? "LOSS" : "PROFIT";
+  });
+  // console.log(tradeStats);
+  return tradeStats;
+};
+
+const createKucoinSocket = (key, secret, passphrase, master_id) => {
+  const api = require("kucoin-node-api");
+  const config = {
+    apiKey: key,
+    secretKey: secret,
+    passphrase: passphrase,
+    environment: "live",
+  };
+
+  api.init(config);
+  api.initSocket({ topic: "orders" }, (msg) => {
+    let data = JSON.parse(msg);
+    if (data.type !== "message") {
+      return;
+    }
+    //console.log('data',data)
+    //return
+    // console.log(data, data.type == "message");
+    const order_id = data.data.orderId;
+    const i = orders.indexOf(order_id);
+    if (i == -1) {
+      orders.push(order_id);
+    } else {
+      return;
+    }
+    //limit
+    if (data.type == "message" && data.data.orderType == "limit") {
+      // console.log("limit", data.data.type);
+      if (data.data.type == "open") {
+        if (subscriber) {
+          // console.log("sub");
+          var ord = {};
+          if (data.data.side == "buy") {
+            ord = {
+              clientOid: uuidv4(),
+              side: data.data.side,
+              symbol: data.data.symbol,
+              type: data.data.orderType,
+              price: data.data.price,
+              size: data.data.size,
+            };
+          } else {
+            ord = {
+              clientOid: uuidv4(),
+              side: data.data.side,
+              symbol: data.data.symbol,
+              type: data.data.orderType,
+              price: data.data.price,
+              size: data.data.size,
+            };
+          }
+          subscriber.rest.Trade.Orders.postOrder(ord)
+            .then((c) => {
+              // console.log(c);
+              // console.log("[ORDER_PLACED] for subscriber");
+            })
+            .catch((e) => {
+              // console.log(e);
+              // console.log("[ORDER_ERROR] for subscriber");
+            });
+        }
+      }
+    }
+    //SPOT market
+    if (data.type == "message" && data.data.orderType == "market") {
+      if (subscriber) {
+        var ord = {};
+        if (data.data.side == "buy") {
+          ord = {
+            clientOid: uuidv4(),
+            side: data.data.side,
+            symbol: data.data.symbol,
+            type: data.data.orderType,
+            funds: data.data.funds,
+          };
+        } else {
+          ord = {
+            clientOid: uuidv4(),
+            side: data.data.side,
+            symbol: data.data.symbol,
+            type: data.data.orderType,
+            size: data.data.size,
+          };
+        }
+        subscriber.rest.Trade.Orders.postOrder(ord)
+          .then((c) => {
+            // console.log(c);
+            // console.log("[ORDER_PLACED] for subscriber");
+          })
+          .catch((e) => {
+            // console.log(e);
+            // console.log("[ORDER_ERROR] for subscriber");
+          });
+      }
+    }
+    // console.log(data);
+  });
+};
+
+async function masterTrader(req, res) {
+  try {
+    const { user_id, nickname, email, intro } = req.body;
+    // console.log(req.body);
     const user = await TableUser.findOne({ _id: user_id });
-    console.log(user);
+    // console.log(user);
     if (!user) {
       return res.status(401).json({
         status: "fail",
@@ -274,71 +694,37 @@ async function approveMaster(req , res) {
     }
 
     const updatedUser = await TableUser.updateOne(
-         { _id: user_id },
-         {
-          $set : {
-            role: req.body.role,
-            tier: "free"
-          },
-        }).then((result) => {
-          resultSet = {
-                msg: "Success : You are a Mastertrader",
-                statusCode: 200
-          }
-        }).catch((err) => {
-          console.log(err);
-        });
-        return resultSet;
+      { _id: user_id },
+      {
+        $set: {
+          nickname: req.body.nickname,
+          intro: req.body.intro,
+        },
+      }
+    )
+      .then((result) => {
+        resultSet = {
+          msg: "Success : Your application is under process",
+          statusCode: 200,
+        };
+      })
+      .catch((err) => {
+        // console.log(err);
+      });
+    return resultSet;
   } catch (error) {
     resultSet = {
-      msg:  error.message,
-      statusCode: 500
-    }
+      msg: error.message,
+      statusCode: 500,
+    };
     return resultSet;
   }
 }
 
-async function masterTrader(req , res) {
+async function gauthdisable(req, res) {
+  const { _id } = req.user;
   try {
-    const { user_id,nickname,email,intro } = req.body;
-    console.log( req.body);
-    const user = await TableUser.findOne({ _id: user_id });
-    console.log(user);
-    if (!user) {
-      return res.status(401).json({
-        status: "fail",
-        message: "User doesn't exist",
-      });
-    }
-
-    const updatedUser = await TableUser.updateOne(
-         { _id: user_id },
-         {
-          $set : {
-            nickname: req.body.nickname,
-            intro: req.body.intro
-          },
-        }).then((result) => {
-          resultSet = {
-                msg: "Success : Your application is under process",
-                statusCode: 200
-          }
-        }).catch((err) => {
-          console.log(err);
-        });
-        return resultSet;
-  } catch (error) {
-    resultSet = {
-      msg:  error.message,
-      statusCode: 500
-    }
-    return resultSet;
-  }
-};
-
-async function gauthdisable(req , res) {
-  try {
-    const { user_id } = req.body;
+    const user_id = _id;
 
     const user = await TableUser.findOne({ _id: user_id });
 
@@ -350,37 +736,41 @@ async function gauthdisable(req , res) {
     }
 
     const updatedUser = await TableUser.updateOne(
-         { _id: user_id },
-         {
-          $set : {
-            otp_enabled: false,
-          },
-        }).then((result) => {
-          resultSet = {
-                msg: "success",
-                statusCode: 200,
-                otp_disabled: true
-          }
-        }).catch((err) => {
-          console.log(err);
-        });
-        return resultSet;
+      { _id: user_id },
+      {
+        $set: {
+          gauth_enabled: false,
+        },
+      }
+    )
+      .then((result) => {
+        resultSet = {
+          msg: "User successfully disable 2FA",
+          statusCode: 200,
+          gauth_enabled: false,
+        };
+      })
+      .catch((err) => {
+        // console.log(err);
+      });
+    return resultSet;
   } catch (error) {
     resultSet = {
-      msg:  error.message,
-      statusCode: 500
-    }
+      msg: error.message,
+      statusCode: 500,
+    };
     return resultSet;
   }
-};
+}
 
 async function gAuth(req, res) {
+  const { _id } = req.user;
   let resultSet = {};
   try {
-    const { user_id } = req.body;
-    console.log(`body`, req.body);
-    const user = await TableUser.findOne({ _id: user_id });
-    console.log(`GAUTH`, user);
+    // const { user_id } = req.body;
+    // console.log(`body`, req.body);
+    const user = await TableUser.findOne({ _id: _id });
+    // console.log(`GAUTH`, user);
 
     if (!user) {
       return res.status(404).json({
@@ -391,9 +781,9 @@ async function gAuth(req, res) {
     let base32_secret;
     try {
       base32_secret = await generateRandomBase32();
-      console.log(base32_secret);
+      // console.log(base32_secret);
     } catch (error) {
-      console.error('Error generating random base32:', error);
+      // console.error("Error generating random base32:", error);
     }
 
     let totp = new OTPAuth.TOTP({
@@ -405,35 +795,36 @@ async function gAuth(req, res) {
     });
 
     let otp_auth_url = totp.toString();
-    console.log(`otpauth_url`, otp_auth_url);
+    // console.log(`otpauth_url`, otp_auth_url);
 
     await TableUser.updateOne(
-      { _id: user_id },
+      { _id: _id },
       {
         $set: {
-          otp_auth_url: otp_auth_url,
-          otp_base32: base32_secret,
+          gauth_auth_url: otp_auth_url,
+          gauth_base32: base32_secret,
         },
       }
-    ).then((result) => {
-      resultSet = {
-        msg: "success",
-        statusCode: 200,
-        base32_secret: base32_secret,
-        otp_auth_url: otp_auth_url,
-        id : user_id,
-        email : user.email
-      };
-    }).catch((err) => {
-      console.log(err);
-    });
+    )
+      .then((result) => {
+        resultSet = {
+          msg: "User successfully enabled 2FA",
+          statusCode: 200,
+          base32_secret: base32_secret,
+          otp_auth_url: otp_auth_url,
+          id: _id,
+          email: user.email,
+        };
+      })
+      .catch((err) => {
+        // console.log(err);
+      });
 
-    console.log(`Data stored in the database`);
+    // console.log(`Data stored in the database`);
 
     return resultSet;
-
   } catch (error) {
-    console.error(error);
+    // console.error(error);
     resultSet = {
       msg: "Fail",
       statusCode: 500,
@@ -443,11 +834,13 @@ async function gAuth(req, res) {
 }
 
 async function gAuthverify(req, res) {
+  let resultSet = {};
+  const { _id } = req.user;
   try {
     const { user_id, token } = req.body;
-
-    const user = await TableUser.findOne({ _id: user_id });
-    console.log(user);
+    // console.log("req.bodu", req.body);
+    const user = await TableUser.findOne({ _id: _id });
+    // console.log(user);
     const message = "Token is invalid or user doesn't exist";
     if (!user) {
       return res.status(401).json({
@@ -460,42 +853,46 @@ async function gAuthverify(req, res) {
       label: "CodevoWeb",
       algorithm: "SHA1",
       digits: 6,
-      secret: user.otp_base32,
+      secret: user.gauth_base32,
     });
+    // console.log(`hoacib`);
 
-    let delta = totp.validate({token}); 
-    console.log(`dbnoaonh`,delta);
-    
-    if (delta === null){
-      res.console.log(`Error Delta is null`);
-    }
-    
-    const updatedUser =  await TableUser.updateOne(
-      { _id: user_id },
-      {
-        $set: {
-          otp_enabled: true,
-          otp_verified: true,
-        },
-      }
-    ).then((result) => {
-      console.log(
-        result
-      );
+    let delta = totp.validate({ token });
+    // console.log(`dbnoaonh`, delta);
+
+    if (delta === null) {
       resultSet = {
-        msg: "success",
-        statusCode: 200,
-        otp_enabled: true,
-        otp_verified: true,
+        msg: "Invalid 2FA",
+        statusCode: 400,
       };
       return resultSet;
+    }
 
-    }).catch((err) => {
-      console.log(err);
-    });
+    const updatedUser = await TableUser.updateOne(
+      { _id: _id },
+      {
+        $set: {
+          gauth_enabled: true,
+          gauth_verified: true,
+        },
+      }
+    )
+      .then((result) => {
+        // console.log(result);
+        resultSet = {
+          msg: "User successfully verified 2FA",
+          statusCode: 200,
+          otp_enabled: true,
+          otp_verified: true,
+        };
+        return resultSet;
+      })
+      .catch((err) => {
+        // console.log(err);
+      });
     return updatedUser;
-
   } catch (error) {
+    // console.log("error", error);
     resultSet = {
       msg: "FAIL",
       statusCode: 500,
@@ -507,14 +904,24 @@ async function gAuthverify(req, res) {
 
 async function gauthvalidate(req, res) {
   try {
-    const { user_id, token } = req.body;
-    const user = await TableUser.findOne({  _id: user_id });
+    const { usernameOrEmail, password, token } = req.body;
+    const user = await TableUser.findOne({
+      $or: [{ email: usernameOrEmail }, { username: usernameOrEmail }],
+    });
+
     const message = "Token is invalid or user doesn't exist";
-    console.log(user);
+    // console.log(user);
     if (!user) {
       return res.status(401).json({
         status: "fail",
         message,
+      });
+    }
+    const passwordMatch = await verifyText(password, user.password);
+    if (!passwordMatch) {
+      return res.status(401).json({
+        status: "fail",
+        message: "invalid user or password",
       });
     }
 
@@ -523,11 +930,11 @@ async function gauthvalidate(req, res) {
       label: "CodevoWeb",
       algorithm: "SHA1",
       digits: 6,
-      secret: user.otp_base32,
+      secret: user.gauth_base32,
     });
 
     const delta = totp.validate({ token, window: 1 });
-    console.log(delta);
+    // console.log(delta);
 
     if (delta === null) {
       return res.status(401).json({
@@ -535,15 +942,29 @@ async function gauthvalidate(req, res) {
         message,
       });
     }
+    const jwt_token = jwt.sign(
+      {
+        _id: user.id,
+        email: user.email,
+        role: user.role,
+      },
+      process.env.JWT_SECRET,
+      { expiresIn: "1h" }
+    );
+    const expire = jwt.sign(
+      {
+        _id: user.id,
+      },
+      process.env.JWT_SECRET,
+      { expiresIn: "15d" }
+    );
     resultSet = {
-      msg: "success",
+      msg: "Login Successful",
+      token: jwt_token,
+      expire,
       statusCode: 200,
-      otp_valid: true,
-      email : user.email
     };
-
     return resultSet;
-
   } catch (error) {
     resultSet = {
       message: error.message,
@@ -552,7 +973,6 @@ async function gauthvalidate(req, res) {
 
     return resultSet;
   }
-
 }
 
 async function getUserData(request) {
@@ -619,7 +1039,18 @@ async function saveUser(request) {
       throw new Error("Invalid request object");
     }
 
-    const { password, confirm_password, username, email, referralCode } = request.body;
+    const { password, confirm_password, username, email, referralCode } =
+      request.body;
+
+    const is_exists = await TableUser.findOne({
+      $or: [{ email }, { username }],
+    });
+    if (is_exists) {
+      return {
+        msg: "username or email already exists",
+        statusCode: 400,
+      };
+    }
 
     if (!password || !confirm_password || !username || !email) {
       throw new Error("Required fields are missing");
@@ -628,37 +1059,37 @@ async function saveUser(request) {
     const hashedPassword = await hashText(password);
     const hashedConfirmPassword = await hashText(confirm_password);
     let referral_code = shortid.generate();
-    console.log(`referral_code`,referral_code);
+    const referralLink = await generateReferralLink(referral_code);
     const ins = {
       username,
       email,
       password: hashedPassword,
       confirm_password: hashedConfirmPassword,
-      referralCode : referral_code
+      referralCode: referral_code,
+      referrallink: referralLink,
     };
 
-
     const insert = new TableUser(ins);
-    const user = await insert.save().then(async (result) => {
-        await generateOTP(result._id)
-      return result._id;
-    }).catch((err) => {
-      console.log(err);
-    });
-
+    const user = await insert
+      .save()
+      .then(async (result) => {
+        await generateOTP(result._id);
+        return result._id;
+      })
+      .catch((err) => {
+        // console.log(err);
+      });
     if (referralCode) {
       const referrerUser = await TableUser.findOne({ referralCode });
-
       if (referrerUser) {
-        referrerUser.creditPoints += 5;
+        referrerUser.creditPoints += 1;
         await referrerUser.save();
       }
-
     }
     return {
       msg: "User created successfully",
       statusCode: 200,
-      user: user.toString()
+      user: user.toString(),
     };
   } catch (error) {
     return {
@@ -732,7 +1163,7 @@ async function deleteUser(request) {
         {
           $set: {
             is_delete: true,
-            // is_active: false,
+            is_active: false,
           },
         }
       ).then(
@@ -830,27 +1261,88 @@ async function userLogin(request) {
         };
         return resultSet;
       }
-
-      const user = await TableUser.findOne({
+      var user = await TableUser.findOne({
         is_active: true,
         $or: [{ username: usernameOrEmail }, { email: usernameOrEmail }],
       });
       if (user) {
-        const passwordMatch = await verifyText(password, user.password);
-
-        if (!passwordMatch) {
+        if (user.account_locked) {
+          const current_time = moment();
+          const locked_date = moment(user.login_block_date);
+          if (locked_date.isBefore(current_time)) {
+            user.account_locked = false;
+            user.num_of_login_attempt = 0;
+            await user.save();
+          }
+        }
+        if (
+          user.num_of_login_attempt >= MAX_LOGIN_ATTEMPTS ||
+          user.account_locked
+        ) {
           resultSet = {
-            msg: "Invalid Credientials",
-            statusCode: 400,
+            msg: "Account is temporarily blocked due to multiple incorrect login attempts. Please try again later.",
+            statusCode: 403,
           };
           return resultSet;
         } else {
-          resultSet = {
-            msg: "Login Sucessfull",
-            list: user,
-            statusCode: 200,
-          };
-          return resultSet;
+          const passwordMatch = await verifyText(password, user.password);
+          if (!passwordMatch) {
+            user.num_of_login_attempt += 1;
+            resultSet = {
+              msg: "invalid username/email or password",
+              statusCode: 403,
+            };
+            if (user.num_of_login_attempt == MAX_LOGIN_ATTEMPTS) {
+              user.account_locked = true;
+              const block_date = moment().add(24, "hours");
+              // console.log(block_date);
+              user.login_block_date = block_date;
+              resultSet = {
+                msg: "Account is temporarily blocked due to multiple incorrect login attempts. Please try again later.",
+                statusCode: 403,
+              };
+            }
+            await user.save();
+
+            return resultSet;
+          } else {
+            user.num_of_login_attempt = 0;
+            user.account_locked = false;
+            await user.save();
+            if (user.gauth_enabled && user.gauth_verified) {
+              resultSet = {
+                msg: "2FA enabled",
+                gauth: true,
+                statusCode: 200,
+              };
+              return resultSet;
+            } else {
+              const token = jwt.sign(
+                {
+                  _id: user.id,
+                  email: user.email,
+                  role: user.role,
+                },
+                process.env.JWT_SECRET,
+                { expiresIn: "15d" }
+              );
+              const expire = jwt.sign(
+                {
+                  _id: user.id,
+                },
+                process.env.JWT_SECRET,
+                { expiresIn: "15d" }
+              );
+              resultSet = {
+                msg: "Login Successful",
+                token: token,
+                expire,
+                gauth: false,
+                statusCode: 200,
+              };
+              return resultSet;
+            }
+          }
         }
       } else {
         resultSet = {
@@ -859,9 +1351,9 @@ async function userLogin(request) {
         };
         return resultSet;
       }
-    } catch (Error) {
+    } catch (error) {
       resultSet = {
-        msg: Error,
+        msg: error.message,
         statusCode: 500,
       };
       return resultSet;
@@ -888,7 +1380,7 @@ async function userForgotPassword(request) {
       }
 
       const user = await TableUser.findOne({ email });
-      console.log(`user`,user._id);
+      // console.log(`user`, user._id);
       if (user) {
         const token = user._id;
         await TableUser.updateOne({ email }, { $set: { token } });
@@ -912,9 +1404,9 @@ async function userForgotPassword(request) {
           }
         );
         resultSet = {
-          msg: "Sucess",
+          msg: "Sucess : Reset-Password link sent to Email sent successfully",
           statusCode: 200,
-          id : user._id
+          id: user._id,
         };
         return resultSet;
       } else {
@@ -942,10 +1434,11 @@ async function userForgotPassword(request) {
 
 async function userResetPassword(request) {
   let resultSet = {};
+  const { _id } = request.user;
   try {
-    if (request && request.params && request.params.id && request.body && request.body.password) {
-      const user = await TableUser.findOne({ _id: request.params.id, is_delete: false });
-      console.log(`user`, user);
+    if (request.body.password) {
+      const user = await TableUser.findOne({ _id: _id, is_delete: false });
+      // console.log(`user`, user);
       if (user) {
         const hashedPassword = await hashText(request.body.password);
         const updatedUser = await TableUser.findByIdAndUpdate(
@@ -967,7 +1460,7 @@ async function userResetPassword(request) {
       } else {
         resultSet = {
           msg: "This link has expired",
-          statusCode: 404, // Change to a more appropriate status code
+          statusCode: 404,
         };
       }
     } else {
@@ -987,23 +1480,22 @@ async function userResetPassword(request) {
 
 async function updatePassword(request) {
   if (request != "" && typeof request !== "undefined") {
+    const { _id } = req.user;
     try {
-      const { old_password, password, confirm_password } = request.body;
+      const { password, confirm_password } = request.body;
 
       const user = await TableUser.findOne({
-        _id: request.params.id,
+        _id: _id,
         // is_active: true,
       });
 
-      const isMatched = await verifyText(old_password, user.password);
-
-      if (user && isMatched) {
+      if (user) {
         const hashedPassword = await hashText(password);
         const hashedConfirmPassword = await hashText(confirm_password);
 
         await TableUser.findByIdAndUpdate(
           {
-            _id: request.params.id,
+            _id: _id,
           },
           {
             $set: {
@@ -1014,7 +1506,7 @@ async function updatePassword(request) {
         );
 
         resultSet = {
-          msg: "sucess",
+          msg: "success",
           statusCode: 200,
         };
         return resultSet;
@@ -1044,41 +1536,43 @@ async function updatePassword(request) {
 async function uploadProfilePicture(request) {
   if (request != "" && typeof request !== "undefined") {
     try {
-      const user = await TableUser.findOne({ _id: request.params.id });
-
-      if (user) {
-        if (request.files) {
-          uploadpath = __dirname + "/../../uploads/images/";
-          user.userProfilePicture = await FileHandler.uploadAvatar(
-            request,
-            uploadpath,
-            "userProfilePicture"
-          );
-
-          await user.save();
-
-          resultSet = {
-            msg: "Profile picture uploaded sucessfully",
-            statusCode: 200,
-          };
-        } else {
-          resultSet = {
-            msg: "no picture found",
-            statusCode: 400,
-          };
-        }
-        return resultSet;
-      } else {
-        resultSet = {
-          msg: "no user found",
-          statusCode: 404,
-        };
-        return resultSet;
-      }
-    } catch (error) {
+      const { base64, ext, mimeType, fileName, path } = request.body;
+      var s3 = new AWS.S3({
+        region: process.env.AWS_BUCKET_REGION,
+        accessKeyId: process.env.AWS_ACCESS_KEY,
+        secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
+      });
+      var options = {
+        Bucket: process.env.AWS_BUCKET_NAME,
+        Key: path + fileName,
+      };
+      await s3.deleteObject(options).promise();
+      const buffer = Buffer.from(base64, "base64");
+      const detectedExt = ext;
+      const detectedMime = mimeType;
+      const key = `${fileName}.${detectedExt}`;
+      let url = "";
+      await s3
+        .putObject({
+          Body: buffer,
+          Key: `${path}/${key}`,
+          ContentType: detectedMime,
+          Bucket: process.env.AWS_BUCKET_NAME,
+          // ACL: "public-read-write",
+        })
+        .promise();
+      url = `https://massa-quest.s3.eu-north-1.amazonaws.com/${path}/${key}`;
       resultSet = {
-        msg: error,
-        statusCode: 500,
+        msg: "File uploaded successfully",
+        data: url,
+        statusCode: 200,
+      };
+      return resultSet;
+    } catch (err) {
+      // console.log(err);
+      resultSet = {
+        msg: "Something wrong happened",
+        statusCode: 400,
       };
       return resultSet;
     }
@@ -1094,46 +1588,47 @@ async function uploadProfilePicture(request) {
 async function generateOTP(id) {
   if (id != "" && typeof id !== "undefined") {
     try {
-      console.log(`requestGenerateOTP`, id);
+      // console.log(`requestGenerateOTP`, id);
       const user = await TableUser.findOne({ _id: id });
-      console.log(`user`, user);
-      
-      const currentTime = moment(); 
-      const otpExpirationTime = moment(currentTime).add(30, 'minutes'); 
-      
+      // console.log(`user`, user);
+      const currentTime = moment();
+      const otpExpirationTime = moment(currentTime).add(30, "minutes");
       const otp = otpGenerator.generate(6, {
         digits: true,
         lowerCaseAlphabets: false,
         upperCaseAlphabets: false,
         specialChars: false,
       });
-
       user.otp = otp;
-      user.otpExpiration = otpExpirationTime; 
+      user.otp_expire_time = otpExpirationTime;
+      const resend_time = moment();
+      user.otp_resend_time = resend_time;
       await user.save();
-      
-      await transporter.sendMail(
-        {
-          from: '"Ryuk Labs 👻" <margarette.schroeder0@ethereal.email>',
-          to: user.email,
-          subject: " Sending OTP",
-          text: "Your Verification code",
-          html: `<p>OTP for email verification is ${otp}</p>`,
-        },
-        (error, info) => {
-          if (error) {
-            resultSet = {
-              msg: error,
-              statusCode: 400,
-            };
+      const template = await EmailTemplates.findOne({ name: "signup_otp" });
+      if (template) {
+        transporter.sendMail(
+          {
+            from: '"Ryuk Labs 👻" <margarette.schroeder0@ethereal.email>',
+            to: user.email,
+            subject: template.subject,
+            text: template.body_text.replace("{otp}", otp),
+            html: template.body_html.replace("{otp}", otp),
+          },
+          (error, _) => {
+            if (error) {
+              resultSet = {
+                msg: error,
+                statusCode: 400,
+              };
+            }
           }
-        }
-      );
-
-      resultSet = {
-        msg: "success",
-        statusCode: 200,
-      };
+        );
+      } else {
+        resultSet = {
+          msg: error,
+          statusCode: 400,
+        };
+      }
       return resultSet;
     } catch (error) {
       resultSet = {
@@ -1154,168 +1649,95 @@ async function generateOTP(id) {
 let generatedSecret = null;
 
 async function generateQRCode(request) {
-    if (request != "" && typeof request !== "undefined") {
-      try {
-        let generatedSecret = speakeasy.generateSecret({
-          name: "thisisWeXTradebackendcode",
+  if (request != "" && typeof request !== "undefined") {
+    try {
+      let generatedSecret = speakeasy.generateSecret({
+        name: "thisisWeXTradebackendcode",
+      });
+      // console.log(generatedSecret);
+      const data = await new Promise((resolve, reject) => {
+        qrcode.toDataURL(generatedSecret.otpauth_url, (err, data) => {
+          if (err) {
+            let resultSet = {
+              msg: "error while generating qr",
+              statusCode: 400,
+            };
+            reject(resultSet);
+          } else {
+            let resultSet = {
+              msg: "qr created",
+              data,
+              statusCode: 200,
+            };
+            resolve(resultSet);
+          }
         });
-        console.log(generatedSecret);
-        const data = await new Promise((resolve, reject) => {
-          qrcode.toDataURL(generatedSecret.otpauth_url, (err, data) => {
-            if (err) {
-              let resultSet = {
-                msg: "error while generating qr",
-                statusCode: 400,
-              };
-              reject(resultSet);
-            } else {
-              let resultSet = {
-                msg: "qr created",
-                data,
-                statusCode: 200,
-              };
-              resolve(resultSet);
-            }
-          });
-        });
-        return data;
-      } catch (error) {
-        let resultSet = {
-          msg: error,
-          statusCode: 500,
-        };
-        return resultSet;
-      }
-    } else {
+      });
+      return data;
+    } catch (error) {
       let resultSet = {
-        msg: "No direct Access Allowed",
+        msg: error,
         statusCode: 500,
       };
       return resultSet;
     }
+  } else {
+    let resultSet = {
+      msg: "No direct Access Allowed",
+      statusCode: 500,
+    };
+    return resultSet;
+  }
 }
-
-// async function verifyUser(request) {
-//   try {
-//     if (!request || typeof request.body !== 'object') {
-//       return {
-//         msg: 'Invalid request',
-//         statusCode: 400,
-//       };
-//     }
-
-//     const { otp } = request.body;
-    
-//     // Find the user by ID and OTP
-//     const user = await TableUser.findOne({ _id: request.params.id, otp });
-
-//     if (!user) {
-//       return {
-//         msg: 'Invalid OTP',
-//         statusCode: 400,
-//       };
-//     }
-
-//     // Update the user's isActive field to true
-//     await TableUser.updateOne({ _id: request.params.id }, { $set: { isActive: true } });
-
-//     return {
-//       msg: 'Successfully verified',
-//       statusCode: 200,
-//     };
-//   } catch (error) {
-//     return {
-//       msg: error.message || 'An error occurred',
-//       statusCode: 500,
-//     };
-//   }
-// }
 
 async function verifyUser(request) {
   try {
-    // Check if the request is valid
-    if (!request || typeof request.body !== 'object') {
+    if (!request || typeof request.body !== "object") {
       return {
-        msg: 'Invalid request',
+        msg: "Invalid request",
         statusCode: 400,
       };
     }
-
     const { otp } = request.body;
-    console.log(request.body);
 
+    // console.log(request.body);
     if (!otp) {
       return {
-        msg: 'OTP are required',
+        msg: "OTP are required",
         statusCode: 400,
       };
     }
-
     const user = await TableUser.findOne({ _id: request.params.id, otp });
-
     if (!user) {
       return {
-        msg: 'No user found',
+        msg: "invalid OTP",
         statusCode: 404,
       };
     }
-
-    
-
-    // if (!user.generatedSecret) {
-    //   return {
-    //     msg: 'Secret not generated',
-    //     statusCode: 400,
-    //   };
-    // }
-
-
-    // const verifiedSecret = speakeasy.totp.verify({
-    //   secret: user.generatedSecret.ascii,
-    //   encoding: 'ascii',
-    //   token,
-    // });
-
-    // if (!verifiedSecret) {
-    //   return {
-    //     msg: 'OTP verification failed',
-    //     statusCode: 401,
-    //   };
-    // }
-
+    const current_date = moment();
+    const expire_time = moment(user.otp_expire_time);
+    if (expire_time.isBefore(current_date)) {
+      return {
+        msg: "OTP has been expired",
+        statusCode: 400,
+      };
+    }
     await TableUser.findByIdAndUpdate(
       { _id: request.params.id },
-      { $set: { otp: '' } }
+      { $set: { otp: "", is_active: true, role: "trader", tier: "free" } }
     );
-
-    await TableUser.findByIdAndUpdate(
-      { _id: request.params.id },
-      { $set: { is_active: 'true' } }
-    );
-
-    await TableUser.findByIdAndUpdate(
-      { _id: request.params.id },
-      { $set: { role: 'trader' } }
-    ); 
-    
-    await TableUser.findByIdAndUpdate(
-      { _id: request.params.id },
-      { $set: { tier: 'free' } }
-    ); 
-
     return {
-      msg: 'Success',
+      msg: "User successfully verified",
       data: otp,
       statusCode: 200,
     };
   } catch (error) {
     return {
-      msg: error.message || 'Internal server error',
+      msg: error.message || "Internal server error",
       statusCode: 500,
     };
   }
 }
-
 
 module.exports = {
   getUserData,
@@ -1341,4 +1763,6 @@ module.exports = {
   approveMaster,
   getTierAndRole,
   addExchange,
+  updateExchange,
+  deleteExchange,
 };

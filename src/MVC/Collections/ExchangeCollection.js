@@ -8,6 +8,11 @@ const ExchangeSchema = Schema({
      required: true,
      default: "",
     },
+    name : {
+        type : String,
+        required: true,
+        default: "",
+    },
     exchange : {
         type : String,
         required: true,
@@ -18,12 +23,12 @@ const ExchangeSchema = Schema({
         required: true,
         default: "",
     },
-    api_Key : {
+    api_key : {
         type : String,
         required: true,
         default: "",
     },
-    Seceret_Key : {
+    secret_key : {
         type : String,
         required: true,
         default: "",

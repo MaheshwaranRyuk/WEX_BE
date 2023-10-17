@@ -7,7 +7,7 @@ const authorizer = async (req, res, next) => {
           authorization.split(" ")[0] != "Bearer"
             ? authorization.split(" ")[0]
             : authorization.split(" ")[1];
-        const decodeToken = jwt.verify(token, process.env.KEY_FOR_AUTH);
+        const decodeToken = jwt.verify(token, process.env.JWT_SECRET);
         let data = null;
         if (decodeToken) {
           data = await TableUserDetails.findOne({

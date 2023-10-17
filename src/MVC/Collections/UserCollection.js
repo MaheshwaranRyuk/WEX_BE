@@ -24,6 +24,14 @@ const UserSchema = Schema({
     type: String,
     default: "",
   },
+  referrallink: {
+    type: String,
+    default: "",
+  },
+  Referral_count :{
+    type: Number,
+    default: "",
+  },
   role: {
     type: String,
     default: "",
@@ -47,43 +55,57 @@ const UserSchema = Schema({
     type: Boolean,
     default: false,
   },
-  token: {
+  reset_password_token: {
     type: String,
     default: "",
   },
-  
+  reset_password_tries:{
+    type: Number,
+    default: 15
+  },
+  password_reset_expire_time:{
+    type: Date // 30 mins from now
+  },
+  password_reset_resend:{
+    type: Date
+  },
   otp: {
     type: String,
     default: "",
   },
-
-  otp_enabled : {
+  otp_expire_time:{
+     type: Date // 30 mins from now
+  },
+  otp_resend_time:{
+     type:Date
+  },
+  gauth_enabled : {
     type : Boolean,
     default: false,
   },
 
-  otp_verified : {
+  gauth_verified : {
     type : Boolean,
     default: false,
 
   },
 
-  otp_ascii : {
+  gauth_ascii : {
     type : String,
     default: "",
   },
 
-  otp_hex : {
+  gauth_hex : {
     type : String,
     default: "",
   },
 
-  otp_base32 : {
+  gauth_base32 : {
     type : String,
     default: "",
   },
 
-  otp_auth_url : {
+  gauth_auth_url : {
     type : String,
     default: "",
   },
@@ -101,6 +123,17 @@ const UserSchema = Schema({
   referralCode : {
     type : String,
     default: "",
+  },
+  num_of_login_attempt:{
+     type: Number,
+     default: 0
+  },
+  login_block_date:{
+     type: Date  // 2 hours from now
+  },
+  account_locked:{
+      type: Boolean,
+      default: false
   }
 
 });

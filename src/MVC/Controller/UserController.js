@@ -1,21 +1,45 @@
+const { validationResult } = require("express-validator");
 var UserModel = require("../Model/UserModel");
 var jwt = require("jsonwebtoken");
+const { body } = require('express-validator');
+const Payments = require("../Collections/Payments");
+const { default: mongoose } = require("mongoose");
+
 // var Auth = require("../Helpers/Auth");
 // var authorizer = require("../Helpers/Auth");
-
-
-const AddApikey = async (req, res, next) => {
-  //   if ((await Auth.authorizer(req, res))) {
-  var data = await UserModel.addApikey(req);
-  res.status(data.statusCode).send(data);
-  //   } else {
-  //     res.status(400).send({ msg: "invalid sessions" });
-  //   }
-};
-
-
+const balance = async(req,res,_)=>{
+     const {_id} = req.user;
+     const user = new mongoose.Types.ObjectId(_id)
+     let balance = 0;
+     const payments = await Payments.aggregate([
+        {
+          $match:{
+            user_id: user,
+            is_success:true
+          },
+        },
+        {
+          $group:{
+            _id: "$user_id",
+            count: { $sum: "$amount" }
+          }
+        },
+     ]);
+     if(payments.length > 0){
+        const dt = payments[0].count;
+        balance = dt
+     }
+     res.json({balance})
+}
 const AddExchange = async (req, res, next) => {
+  const result = validationResult(req)
   //   if ((await Auth.authorizer(req, res))) {
+  if(!result.isEmpty()){
+      return res.status(400).json({
+         status:400,
+         message:result.array()[0].msg
+    } )
+  }    
   var data = await UserModel.addExchange(req);
   res.status(data.statusCode).send(data);
   //   } else {
@@ -32,7 +56,6 @@ const Payment = async (req, res, next) => {
   //   }
 };
 
-
 const GetTier = async (req, res, next) => {
   //   if ((await Auth.authorizer(req, res))) {
   var data = await UserModel.getTierAndRole(req);
@@ -44,7 +67,8 @@ const GetTier = async (req, res, next) => {
 
 const ApproveMaster = async (req, res, next) => {
   //   if ((await Auth.authorizer(req, res))) {
-  var data = await UserModel.approveMaster(req);
+  var data = await UserModel.approveMaster(req,res);
+  console.log('data.statusCode',data.statusCode)
   res.status(data.statusCode).send(data);
   //   } else {
   //     res.status(400).send({ msg: "invalid sessions" });
@@ -52,7 +76,14 @@ const ApproveMaster = async (req, res, next) => {
 };
 
 const TierUpgrade = async (req, res, next) => {
+  const result = validationResult(req)
   //   if ((await Auth.authorizer(req, res))) {
+  if(!result.isEmpty()){
+      return res.status(400).json({
+         status:400,
+         message:result.array()[0].msg
+    } )
+  }      
   var data = await UserModel.tierUpgrade(req);
   res.status(data.statusCode).send(data);
   //   } else {
@@ -70,14 +101,20 @@ const AdminLogin = async (req, res, next) => {
 };
 
 const MasterTrader = async (req, res, next) => {
+  const result = validationResult(req)
   //   if ((await Auth.authorizer(req, res))) {
+  if(!result.isEmpty()){
+      return res.status(400).json({
+         status:400,
+         message:result.array()[0].msg
+    } )
+  }  
   var data = await UserModel.masterTrader(req);
   res.status(data.statusCode).send(data);
   //   } else {
   //     res.status(400).send({ msg: "invalid sessions" });
   //   }
 };
-
 
 const Gauthdisable = async (req, res, next) => {
   //   if ((await Auth.authorizer(req, res))) {
@@ -87,18 +124,32 @@ const Gauthdisable = async (req, res, next) => {
   //     res.status(400).send({ msg: "invalid sessions" });
   //   }
 };
-
+//Guath_validate
 const Gauthverify = async (req, res, next) => {
+  const result = validationResult(req)
   //   if ((await Auth.authorizer(req, res))) {
+  if(!result.isEmpty()){
+      return res.status(400).json({
+         status:400,
+         message:result.array()[0].msg
+    } )
+  }  
   var data = await UserModel.gAuthverify(req);
   res.status(data.statusCode).send(data);
   //   } else {
   //     res.status(400).send({ msg: "invalid sessions" });
   //   }
 };
-
+//Guath_validate
 const Gauthvalidate = async (req, res, next) => {
+  const result = validationResult(req)
   //   if ((await Auth.authorizer(req, res))) {
+  if(!result.isEmpty()){
+      return res.status(400).json({
+         status:400,
+         message:result.array()[0].msg
+    } )
+  }  
   var data = await UserModel.gauthvalidate(req);
   res.status(data.statusCode).send(data);
   //   } else {
@@ -123,16 +174,6 @@ const getUserData = async (req, res, next) => {
   //     res.status(400).send({ msg: "invalid sessions" });
   //   }
 };
-
-const saveUser = async (req, res, next) => {
-  //   if ((await Auth.authorizer(req, res))) {
-  var data = await UserModel.saveUser(req);
-  res.status(data.statusCode).send(data);
-  //   } else {
-  //     res.status(400).send({ msg: "invalid sessions" });
-  //   }
-};
-
 const updateUser = async (req, res, next) => {
   // if ((await Auth.authorizer(req, res))) {
   var data = await UserModel.updateUser(req);
@@ -156,27 +197,93 @@ const checkData = async (req, res, next) => {
   res.status(data.statusCode).send(data);
 };
 
+//login
 const userLogin = async (req, res, next) => {
+
   // if ((await Auth.authorizer(req, res))) {
+  const result = validationResult(req)
+    if(!result.isEmpty()){
+       return res.status(400).json({
+          status:400,
+          message:result.array()[0].msg
+       })
+  }  
   var data = await UserModel.userLogin(req);
   res.status(data.statusCode).send(data);
   // } else {
   // res.status(400).send({ msg: "invalid sessions" });
   // }
+}
+
+//register 
+const saveUser = async (req, res, next) => {
+  //   if ((await Auth.authorizer(req, res))) {
+    const result = validationResult(req)
+    if(!result.isEmpty()){
+      return res.status(400).json({
+         status:400,
+         message:result.array()[0].msg
+    })
+  }
+  var data = await UserModel.saveUser(req);
+  res.status(data.statusCode).send(data);
+  //   } else {
+  //     res.status(400).send({ msg: "invalid sessions" });
+  //   }
 };
 
+//verify
+const verifyUser = async (req, res, next) => {
+  // if ((await Auth.authorizer(req, res))) {
+    const result = validationResult(req)
+    if(!result.isEmpty()){
+      return res.status(400).json({
+         status:400,
+         message:result.array()[0].msg
+    })
+  }
+  var data = await UserModel.verifyUser(req);
+  res.status(data.statusCode).send(data);
+  // } else {
+  // res.status(400).send({ msg: "invalid sessions" });
+  // }
+};
+//forgot-password
 const userForgotPassword = async (req, res, next) => {
+  const result = validationResult(req)
+    if(!result.isEmpty()){
+      return res.status(400).json({
+         status:400,
+         message:result.array()[0].msg
+    })
+  }
   var data = await UserModel.userForgotPassword(req);
   res.status(data.statusCode).send(data);
 };
 
+//reset-password with token
 const userResetPassword = async (req, res, next) => {
+  const result = validationResult(req)
+  if(!result.isEmpty()){
+    return res.status(400).json({
+       status:400,
+       message:result.array()[0].msg
+    } )
+  }
   var data = await UserModel.userResetPassword(req);
   res.status(data.statusCode).send(data);
 };
 
+//update password
 const updatePassword = async (req, res, next) => {
   // if ((await Auth.authorizer(req, res))) {
+    const result = validationResult(req)
+    if(!result.isEmpty()){
+      return res.status(400).json({
+         status:400,
+         message:result.array()[0].msg
+      } )
+    }  
   var data = await UserModel.updatePassword(req);
   res.status(data.statusCode).send(data);
   // } else {
@@ -184,8 +291,17 @@ const updatePassword = async (req, res, next) => {
   // }
 };
 
+//upload-ProfilePicture
 const uploadProfilePicture = async (req, res, next) => {
+  const result = validationResult(req)
   // if ((await Auth.authorizer(req, res))) {
+    
+    if(!result.isEmpty()){
+      return res.status(400).json({
+         status:400,
+         message:result.array()[0].msg
+      } )
+    }
   var data = await UserModel.uploadProfilePicture(req);
   res.status(data.statusCode).send(data);
   // } else {
@@ -203,17 +319,15 @@ const generateQRCode = async (req, res, next) => {
 };
 
 const generateOTP = async (req, res, next) => {
+  const result = validationResult(req)
   // if ((await Auth.authorizer(req, res))) {
+    if(!result.isEmpty()){
+      return res.status(400).json({
+         status:400,
+         message:result.array()[0].msg
+      } )
+    }  
   var data = await UserModel.generateOTP(req);
-  res.status(data.statusCode).send(data);
-  // } else {
-  // res.status(400).send({ msg: "invalid sessions" });
-  // }
-};
-
-const verifyUser = async (req, res, next) => {
-  // if ((await Auth.authorizer(req, res))) {
-  var data = await UserModel.verifyUser(req);
   res.status(data.statusCode).send(data);
   // } else {
   // res.status(400).send({ msg: "invalid sessions" });
@@ -245,5 +359,5 @@ module.exports = {
   GetTier,
   Payment,
   AddExchange,
-  AddApikey
+  balance
 };

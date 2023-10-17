@@ -6,13 +6,19 @@ require("dotenv").config();
 const cors = require("cors");
 
 const Routes = require("./src/Routes/Routes");
+const EmailTemplates = require("./src/MVC/Collections/EmailTemplates");
 
 app.use(
   cors({
     origin: "*",
   })
 );
-
+// EmailTemplates.create({
+//   name:'signup_otp',
+//   subject:'OTP verification',
+//   body_html:"<p>OTP for email verification is {otp} </p>",
+//   body_text:"Your Verification code {otp}"
+// })
 app.use(bodyParser.json({ limit: "50mb" }));
 app.use(bodyParser.urlencoded({ extended: false, limit: "50mb" }));
 app.use(cors());
